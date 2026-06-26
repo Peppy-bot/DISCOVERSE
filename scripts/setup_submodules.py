@@ -20,6 +20,7 @@ from pathlib import Path
 
 # Mapping of feature modules to required submodules
 MODULE_SUBMODULES = {
+    'gs': [],  # Gaussian Splatting needs no submodules
     'randomain': ['submodules/ComfyUI'],
     'act': ['policies/act'],
     'lidar': ['submodules/MuJoCo-LiDAR'],
@@ -78,41 +79,26 @@ def initialize_submodule(submodule_path):
 def detect_installed_modules():
     """Detect which optional modules are installed."""
     installed_modules = []
-    
-    try:
-        import pkg_resources
-        
-        # Get the discoverse package info
+
+    # Try importing specific modules to detect installation
+    test_imports = {
+        'gs': ['torch', 'gsplat'],
+        'lidar': ['taichi'],
+        'xml-editor': ['PyQt5'],
+        'act': ['einops', 'hydra'],
+        'randomain': ['transformers', 'safetensors'],
+        'rdt': ['diffusers', 'timm'],
+        'diffusion-policy': ['zarr', 'numba'],
+    }
+
+    for module, imports in test_imports.items():
         try:
-            pkg = pkg_resources.get_distribution('discoverse')
-            # This is a simplified detection - in reality you might want to check 
-            # the actual installed dependencies
-        except:
-            pass
-            
-        # Alternative: try importing specific modules to detect installation
-        test_imports = {
-            'gs': ['torch', 'gsplat'],
-            'lidar': ['taichi'],
-            'xml-editor': ['PyQt5'],
-            'act': ['einops', 'hydra'],
-            'randomain': ['transformers', 'safetensors'],
-            'rdt': ['diffusers', 'timm'],
-            'diffusion-policy': ['zarr', 'numba'],
-        }
-        
-        for module, imports in test_imports.items():
-            try:
-                for imp in imports:
-                    __import__(imp)
-                installed_modules.append(module)
-            except ImportError:
-                continue
-                
-    except ImportError:
-        print("⚠️  Cannot detect installed modules automatically / 无法自动检测已安装模块")
-        print("   Please specify modules manually or install all submodules / 请手动指定模块或安装所有子模块")
-    
+            for imp in imports:
+                __import__(imp)
+            installed_modules.append(module)
+        except ImportError:
+            continue
+
     return installed_modules
 
 def setup_submodules_for_modules(modules):
