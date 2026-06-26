@@ -1,0 +1,97 @@
+# Pixi environment for DISCOVERSE (https://github.com/discoverse-dev/DISCOVERSE)
+#
+# Installs the core DISCOVERSE simulation package (mujoco, numpy, scipy, opencv, ...)
+# PLUS the GPU 3D-Gaussian-Splatting renderer, with the whole CUDA stack coming from
+# conda-forge so it is reproducible and matched to this machine's RTX 5090 (Blackwell,
+# compute capability sm_120 -> requires CUDA >= 12.8).
+#
+# Other optional feature groups (lidar / act / diffusion-policy / rdt / ...) are not
+# enabled by default. To add one:
+#     pixi run pip install -e ".[lidar,visualization]"
+#     pixi run setup-submodules --module lidar
+
+[workspace]
+name = "discoverse"
+version = "1.9.0"
+description = "Pixi environment for the DISCOVERSE 3DGS robot simulation framework"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+# Tell the solver this machine has a CUDA driver (driver 580 supports CUDA 13.0).
+# Without this, pixi can't auto-detect the driver during the solve and rejects every
+# GPU build with "__cuda: no candidates were found". 12.9 matches the pinned toolkit.
+[system-requirements]
+cuda = "12.9"
+
+[dependencies]
+python = "3.13.*"
+pip = "*"
+git-lfs = "*"
+# numpy < 2.5: mediapy 1.2.6 (a core dep) can't subclass the PEP-695 numpy.typing.NDArray
+# alias introduced in numpy 2.5 under Python 3.13. Managed by conda so there is a single
+# numpy shared by the conda (torch) and pip (mujoco/opencv/mediapy) packages.
+numpy = ">=2.1,<2.5"
+
+# ---- CUDA stack (conda-forge), pinned to 12.9 for Blackwell / sm_120 ----
+# cuda-version pins torch's runtime libs and the build toolkit to the SAME CUDA so the
+# gsplat kernels compile and load against the right libraries.
+cuda-version = "12.9.*"
+# Pin the CUDA *build variant* of pytorch, not just the version. Blackwell sm_120
+# needs kernels compiled with CUDA >= 12.8; the build string "cuda129_*" guarantees a
+# CUDA-12.9 build (the cuda126 build only ships up to sm_90 and warns sm_120 is
+# unsupported). NOTE: torchvision is intentionally NOT pinned here — its conda builds
+# lag pytorch and would force the solver back down to a cuda126 build. The 3DGS
+# renderer doesn't need it; add it later (matching cu128+) when you set up ML policies.
+pytorch = { version = ">=2.8", build = "cuda129_*" }
+# Minimal CUDA build tools so gsplat can compile its kernels. We deliberately do NOT
+# install the full `cuda-toolkit` metapackage: it pulls cuda-gdb -> gdb, which is
+# pinned to Python 3.10 and is unsolvable alongside Python 3.13 (and we don't need a
+# debugger). nvcc + the cudart dev headers + CCCL (Thrust/CUB) is all gsplat needs.
+cuda-nvcc = "12.9.*"        # the CUDA compiler (nvcc)
+cuda-cudart-dev = "12.9.*"  # cuda_runtime.h + cudart link lib
+cuda-cccl = "12.9.*"        # Thrust / CUB headers used by gsplat kernels
+cxx-compiler = "*"          # host C/C++ compiler for the gsplat extension build
+ninja = "*"                 # used by torch's cpp_extension JIT build
+
+[pypi-dependencies]
+# Editable install of the local DISCOVERSE checkout (core deps from pyproject.toml).
+discoverse = { path = ".", editable = true }
+# 3D Gaussian Splatting renderer (pure-Python) + its CUDA kernel backend (gsplat).
+# torch is already provided by the conda pytorch-gpu above, so these resolve against it
+# instead of pulling a separate pip torch.
+gaussian_renderer = ">=0.1.3"
+gsplat = "*"
+huggingface_hub = "*"
+
+[pypi-options]
+# gsplat imports torch at build time and builds a CUDA extension; disable build
+# isolation so it uses the conda-installed torch/headers rather than a clean build env.
+no-build-isolation = ["gsplat"]
+
+[activation.env]
+# The conda pytorch package exports a TORCH_CUDA_ARCH_LIST containing arches
+# (10.1, 10.3, 12.1) that torch's JIT extension builder doesn't recognize, which breaks
+# gsplat's CUDA compile with "Unknown CUDA arch (10.1)". Pin it to THIS GPU's arch:
+# RTX 5090 / Blackwell == compute capability 12.0 == sm_120 (+PTX for forward compat).
+TORCH_CUDA_ARCH_LIST = "12.0+PTX"
+# conda's cuda-nvcc doesn't export CUDA_HOME, but torch's cpp_extension needs it to
+# find nvcc as "$CUDA_HOME/bin/nvcc". It MUST point at $CONDA_PREFIX (the REAL nvcc):
+# the cuda-nvcc package also exposes nvcc via a symlink under targets/x86_64-linux/bin,
+# but invoking nvcc through that symlink breaks its nvcc.profile path math (it can't
+# then locate cicc / cuda_runtime.h). The real nvcc resolves cicc + headers correctly.
+CUDA_HOME = "$CONDA_PREFIX"
+# conda-forge keeps the CUDA headers under the split "targets" dir, so host-side (.cpp)
+# compiles in gsplat's build won't find cuda_runtime.h via $CUDA_HOME/include. CPATH is
+# honored by gcc/g++/nvcc and makes those headers visible to every compile step.
+CPATH = "$CONDA_PREFIX/targets/x86_64-linux/include"
+
+[tasks]
+# Validate which DISCOVERSE modules are importable / installed.
+check-install = "python scripts/check_installation.py"
+# Verify the MuJoCo install specifically.
+check-mujoco = "python scripts/check_mujoco_install.py"
+# Verify CUDA: device, sm_120 in torch arch list, a real GPU matmul, and gsplat kernels.
+check-cuda = "python local_tools/check_cuda.py"
+# Initialize only the git submodules a given feature needs, e.g.
+#   pixi run setup-submodules --module lidar
+setup-submodules = "python scripts/setup_submodules.py"
